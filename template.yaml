@@ -1,27 +1,69 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: Template for Minecraft Server hosted with Fargate.
 Parameters:
-  Image:
+  AcceptEULA:
     Type: String
-    # Update with the Docker image. "You can use images in the Docker Hub registry or specify other repositories (repository-url/image:tag)."
-    Default: docker.io/itzg/minecraft-server:latest
-  ContainerPort:
+    AllowedValues:
+      - 'TRUE'
+  MinecraftVersion:
+    Default: LATEST
+    Type: String
+    Description: "Latest or version number (e.g. 1.20.4)"
+  LowercaseName:
+    Type: String
+  Memory:
+    Default: 4G
+    Type: String
+    AllowedValues:
+      - 4G
+      - 6G
+      - 8G
+      - 10G
+      - 12G
+      - 14G
+      - 16G
+  Difficulty:
+    Default: normal
+    Type: String
+    AllowedValues:
+      - peaceful
+      - easy
+      - normal
+      - hard
+  UseWhiteList:
+    Default: true
+    Type: String
+    AllowedValues:
+      - true
+      - false
+  WorldSeed:
+    Default: ""
+    Type: String
+  MaxPlayers:
+    Default: 20
     Type: Number
-    Default: 25565
+  Hardcore:
+    Default: false
+    Type: String
+    AllowedValues:
+      - true
+      - false
   VpcCIDR:
-    Type: String
     Default: 10.30.0.0/16
+    Type: String
   PublicSubnet1CIDR:
-    Type: String
     Default: 10.30.1.0/24
-  PublicSubnet2CIDR:
     Type: String
+  PublicSubnet2CIDR:
     Default: 10.30.2.0/24
+    Type: String
+
 Resources:
-  Cluster:
+  # ECS
+  ServerCluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: !Sub '${AWS::StackName}-Cluster'
+      ClusterName: !Sub '${AWS::StackName}-ServerCluster'
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     # Makes sure the log group is created before it is used.
@@ -38,13 +80,13 @@ Resources:
       # 1024 (1 vCPU) - Available memory values: 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB
       # 2048 (2 vCPU) - Available memory values: Between 4GB and 16GB in 1GB increments
       # 4096 (4 vCPU) - Available memory values: Between 8GB and 30GB in 1GB increments
-      Cpu: 1024
+      Cpu: 2048
       # 0.5GB, 1GB, 2GB - Available cpu values: 256 (.25 vCPU)
       # 1GB, 2GB, 3GB, 4GB - Available cpu values: 512 (.5 vCPU)
       # 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB - Available cpu values: 1024 (1 vCPU)
       # Between 4GB and 16GB in 1GB increments - Available cpu values: 2048 (2 vCPU)
       # Between 8GB and 30GB in 1GB increments - Available cpu values: 4096 (4 vCPU)
-      Memory: 2GB
+      Memory: !Sub "${Memory}B"
       # A role needed by ECS.
       # "The ARN of the task execution role that containers in this task can assume. All containers in this task are granted the permissions that are specified in this role."
       # "There is an optional task execution IAM role that you can specify with Fargate to allow your Fargate tasks to make API calls to Amazon ECR."
@@ -53,9 +95,9 @@ Resources:
       TaskRoleArn: !Ref TaskRole
       ContainerDefinitions:
         - Name: !Ref AWS::StackName
-          Image: !Ref Image
+          Image: docker.io/itzg/minecraft-server:latest
           PortMappings:
-            - ContainerPort: !Ref ContainerPort
+            - ContainerPort: 25565
           # Send logs to CloudWatch Logs
           LogConfiguration:
             LogDriver: awslogs
@@ -65,7 +107,23 @@ Resources:
               awslogs-stream-prefix: ecs
           Environment:
             - Name: EULA
-              Value: 'TRUE'
+              Value: !Ref AcceptEULA
+            - Name: TYPE
+              Value: PAPER
+            - Name: MEMORY
+              Value: !Ref Memory
+            - Name: VERSION
+              Value: !Ref MinecraftVersion
+            - Name: DIFFICULTY
+              Value: !Ref Difficulty
+            - Name: ENABLE_WHITELIST
+              Value: !Ref UseWhiteList
+            - Name: SEED
+              Value: !Ref WorldSeed
+            - Name: HARDCORE
+              Value: !Ref Hardcore
+            - Name: MAX_PLAYERS
+              Value: !Ref MaxPlayers
           MountPoints:
             - SourceVolume: efs-volume
               ContainerPath: /data
@@ -77,40 +135,7 @@ Resources:
             AuthorizationConfig:
               AccessPointId: !Ref EFSAccessPoint
               IAM: ENABLED
-  EFSFileSystem:
-    Type: AWS::EFS::FileSystem
-  EFSAccessPoint:
-    Type: AWS::EFS::AccessPoint
-    Properties:
-      FileSystemId: !Ref EFSFileSystem
-      PosixUser: 
-        Gid: '1000'
-        Uid: '1000'
-      RootDirectory:
-        Path: /minecraft
-        CreationInfo:
-            OwnerGid: '1000'
-            OwnerUid: '1000'
-            Permissions: '0755'
-      AccessPointTags:
-        - Key: Name
-          Value: !Ref AWS::StackName
-  EFSMountTarget1:
-    Type: AWS::EFS::MountTarget
-    Properties:
-      FileSystemId: !Ref EFSFileSystem
-      SecurityGroups: 
-        - !Ref ContainerSecurityGroup
-      SubnetId: !Ref PublicSubnet1
-  EFSMountTarget2:
-    Type: AWS::EFS::MountTarget
-    Properties:
-      FileSystemId: !Ref EFSFileSystem
-      SecurityGroups: 
-        - !Ref ContainerSecurityGroup
-      SubnetId: !Ref PublicSubnet2
-
-  # A role needed by ECS
+   # A role needed by ECS
   ExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -123,8 +148,8 @@ Resources:
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
-  # A role for the containers
   TaskRole:
+    # A role for the containers
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub '${AWS::StackName}-TaskRole'
@@ -153,8 +178,8 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: TCP
-          ToPort: !Ref ContainerPort
-          FromPort: !Ref ContainerPort
+          ToPort: 25565
+          FromPort: 25565
           CidrIp: 0.0.0.0/0
           Description: Minecraft Client Port
   ContainerSecurityGroupEFSIngress:
@@ -170,7 +195,7 @@ Resources:
     Type: AWS::ECS::Service
     Properties: 
       ServiceName: !Ref AWS::StackName
-      Cluster: !Ref Cluster
+      Cluster: !Ref ServerCluster
       TaskDefinition: !Ref TaskDefinition
       DeploymentConfiguration:
         MinimumHealthyPercent: 100
@@ -191,6 +216,43 @@ Resources:
     Properties:
       LogGroupName: !Ref AWS::StackName
 
+  # EFS
+  EFSFileSystem:
+    Type: AWS::EFS::FileSystem
+  EFSAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      PosixUser: 
+        Gid: '1000'
+        Uid: '1000'
+      RootDirectory:
+        Path: /minecraft
+        CreationInfo:
+            OwnerGid: '1000'
+            OwnerUid: '1000'
+            Permissions: '0755'
+      AccessPointTags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+  EFSMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SecurityGroups: 
+        - !Ref ContainerSecurityGroup
+        - !Ref EC2SecurityGroup
+      SubnetId: !Ref PublicSubnet1
+  EFSMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SecurityGroups: 
+        - !Ref ContainerSecurityGroup
+        - !Ref EC2SecurityGroup
+      SubnetId: !Ref PublicSubnet2
+
+  # VPC and subnets
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -255,3 +317,110 @@ Resources:
     Properties:
       RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet2
+
+
+  # Everything that starts and stops the server
+
+
+  # EFSSync
+  EFSSyncS3:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub '${LowercaseName}-efs-sync-bucket-${AWS::AccountId}'
+  SyncRole:
+    # A role for the containers
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-SyncRole'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: datasync.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-SyncRole-Policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                  - elasticfilesystem:DescribeFileSystems
+                Resource:
+                  - !GetAtt EFSFileSystem.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:GetObject
+                  - s3:GetObjectTagging
+                  - s3:GetObjectVersion
+                  - s3:GetObjectVersionTagging
+                Resource:
+                  - !GetAtt EFSSyncS3.Arn
+                  - !Sub '${EFSSyncS3.Arn}/*'
+  SyncLocationS3:
+    Type: AWS::DataSync::LocationS3
+    Properties:
+      S3BucketArn: !GetAtt EFSSyncS3.Arn
+      S3Config:
+        BucketAccessRoleArn: !GetAtt SyncRole.Arn
+  SyncLocationEFS:
+    Type: AWS::DataSync::LocationEFS
+    Properties:
+      AccessPointArn: !GetAtt EFSAccessPoint.Arn
+      Ec2Config: 
+        SecurityGroupArns: 
+          - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/${ContainerSecurityGroup}"
+        SubnetArn: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${PublicSubnet1}"
+      EfsFilesystemArn: !GetAtt EFSFileSystem.Arn
+      FileSystemAccessRoleArn: !GetAtt SyncRole.Arn
+      InTransitEncryption: TLS1_2
+  SyncFiles:
+    Type: AWS::DataSync::Task
+    Properties:
+      Name: !Sub '${AWS::StackName}-Sync-Files-World'
+      CloudWatchLogGroupArn: !GetAtt LogGroup.Arn
+      DestinationLocationArn: !Ref SyncLocationEFS
+      SourceLocationArn: !Ref SyncLocationS3
+      Includes: 
+        - FilterType: SIMPLE_PATTERN
+          Value: /world/datapacks
+
+
+  # AdminEC2
+  EC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-04e5276ebb8451442
+      InstanceType: t2.nano
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !GetAtt EC2SecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-AdminEC2'
+      UserData: 
+        Fn::Base64: !Join
+          - ''
+          - - 'sudo yum install -y amazon-efs-utils'
+            - 'sudo mkdir efs'
+            - !Sub sudo mount -t efs ${EFSFileSystem} efs/
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName}-EC2-SSH'
+      VpcId: !Ref VPC
+  EC2SecurityGroupEFSIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EC2SecurityGroup
+      SourceSecurityGroupId: !Ref EC2SecurityGroup
+      IpProtocol: TCP
+      ToPort: 2049
+      FromPort: 2049
+      Description: EFS Port
