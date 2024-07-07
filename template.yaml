@@ -440,6 +440,8 @@ Resources:
             Action:
             - ssm:DescribeSessions
             - ec2:DescribeNetworkInterfaces
+            - scheduler:GetSchedule
+            - scheduler:UpdateSchedule
             Resource: '*'
           - Effect: Allow
             Action:
@@ -461,6 +463,18 @@ Resources:
             - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/${ServerCluster}/*'
             - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ServerCluster}'
             - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/${ServerCluster}/*'
+  ServerMonitorPassSelfPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-Server-Monitor-Pass-Self-Policy'
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: !GetAtt ServerMonitorSchedulerRole.Arn
+      Roles:
+        - !Ref ServerMonitorLambdaRole
   ServerMonitorLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -475,9 +489,10 @@ Resources:
           SERVICE: !Ref Service
           CONTAINER: !Ref AWS::StackName
           DNS_NAME: !Ref Domain
+          HOSTED_ZONE_ID: !Ref HostedZoneId
+          SCHEDULER_NAME: !Sub '${AWS::StackName}-Server-Monitor-Schedule'
           DISCORD_WEBHOOK_URL: !Ref DiscordWebhookUrl
           DISCORD_WEBHOOK_USERNAME: !Ref DiscordWebhookUsername
-          HOSTED_ZONE_ID: !Ref HostedZoneId
           DISCORD_ERROR_ADMIN_ID: !Ref DiscordErrorAdminId
       Role: !GetAtt ServerMonitorLambdaRole.Arn
       Runtime: python3.10

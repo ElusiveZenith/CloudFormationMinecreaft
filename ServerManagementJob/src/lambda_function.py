@@ -5,12 +5,14 @@ import requests
 client = boto3.client('ecs')
 logs_client = boto3.client('logs')
 route_client = boto3.client('route53')
+scheduler_client = boto3.client('scheduler')
 
 cluster = os.environ.get('CLUSTER')
 service = os.environ.get('SERVICE')
 container = os.environ.get('CONTAINER')
 dns_name = os.environ.get('DNS_NAME')
 hosted_zone_id = os.environ.get('HOSTED_ZONE_ID')
+scheduler_name = os.environ.get('SCHEDULER_NAME')
 discord_webhook_url = os.environ.get('DISCORD_WEBHOOK_URL') or None
 discord_comment_username = os.environ.get('DISCORD_WEBHOOK_USERNAME') or 'Minecraft Server'
 discord_error_admin_id = os.environ.get('DISCORD_ERROR_ADMIN_ID') or None
@@ -28,6 +30,16 @@ def post_discord_message(message, admin_ping=False):
   requests.post(discord_webhook_url, json=data)
 
 
+def cron_job_state(enabled):
+  response = scheduler_client.get_schedule(Name=scheduler_name)
+  response['State'] = "ENABLED" if enabled else "DISABLED"
+  response.pop('Arn', None)
+  response.pop('CreationDate', None)
+  response.pop('LastModificationDate', None)
+  response.pop('ResponseMetadata', None)
+  scheduler_client.update_schedule(**response)
+
+
 def stop_server():
   print("Stopping Server")
   deregister_ip()
@@ -36,6 +48,7 @@ def stop_server():
       service=service,
       desiredCount=0
   )
+  cron_job_state(False)
   post_discord_message("Server Shutting Down")
 
 
@@ -78,6 +91,7 @@ def get_players(task_arn):
     time.sleep(3)
     session = get_ssm_session(exec_resp['session']['sessionId'])
 
+  time.sleep(3)
   response = logs_client.get_log_events(
     logGroupName='Minecraft',
     logStreamName=exec_resp['session']['sessionId'],
@@ -192,7 +206,7 @@ def check_player_count():
       has_active_players()
     else:
       no_active_players()
-  except boto3.exceptions.InvalidParameterException:
+  except client.exceptions.InvalidParameterException:
     print("Server is launching - Not checking player count")
 
 
@@ -201,5 +215,5 @@ def lambda_handler(event=None, context=None):
     check_dns()
     check_player_count()
   except Exception as e:
-    post_discord_message(e, admin_ping=True)
+    post_discord_message('An error occurred, check logs for more details.', admin_ping=True)
     raise e
