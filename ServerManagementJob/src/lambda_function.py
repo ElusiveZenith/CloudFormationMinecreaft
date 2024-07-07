@@ -1,15 +1,31 @@
 import os
 import time
 import boto3
+import requests
 client = boto3.client('ecs')
 logs_client = boto3.client('logs')
 route_client = boto3.client('route53')
 
-cluster = os.environ.get('CLUSTER') or 'Minecraft-ServerCluster'
+cluster = os.environ.get('CLUSTER')
 service = os.environ.get('SERVICE')
-container = os.environ.get('CONTAINER') or 'Minecraft'
-hosted_zone_id = os.environ.get('HOSTED_ZONE_ID')
+container = os.environ.get('CONTAINER')
 dns_name = os.environ.get('DNS_NAME')
+hosted_zone_id = os.environ.get('HOSTED_ZONE_ID')
+discord_webhook_url = os.environ.get('DISCORD_WEBHOOK_URL') or None
+discord_comment_username = os.environ.get('DISCORD_WEBHOOK_USERNAME') or 'Minecraft Server'
+discord_error_admin_id = os.environ.get('DISCORD_ERROR_ADMIN_ID') or None
+
+
+def post_discord_message(message, admin_ping=False):
+  if discord_webhook_url is None:
+    return
+  if admin_ping and discord_error_admin_id:
+    message = f'<{discord_error_admin_id}> {message}'
+  data = {
+    "content": message,
+    "username": discord_comment_username
+  }
+  requests.post(discord_webhook_url, json=data)
 
 
 def stop_server():
@@ -20,7 +36,7 @@ def stop_server():
       service=service,
       desiredCount=0
   )
-  # TODO: Post to discord
+  post_discord_message("Server Shutting Down")
 
 
 def get_ssm_session(sessionId):
@@ -59,7 +75,7 @@ def get_players(task_arn):
   session = get_ssm_session(exec_resp['session']['sessionId'])
   # Paginate until Session completes and logs uploaded to CloudWatch logs
   while (session == None or len(session) == 0):
-    time.sleep(5)
+    time.sleep(3)
     session = get_ssm_session(exec_resp['session']['sessionId'])
 
   response = logs_client.get_log_events(
@@ -105,7 +121,7 @@ def register_ip():
 
   response = set_ip_to_dns(public_ip)
   if response.get('ResponseMetadata', {}).get('HTTPStatusCode', 500) != 200:
-    # Post to discord
+    post_discord_message(f'Error setting DNS. Connect using: {public_ip}',  admin_ping=True)
     print('ERROR: Unable to set Route53 record')
   else:
     print('Adding DNS tag')
@@ -116,6 +132,7 @@ def register_ip():
         'value': 'true',
       }],
     )
+    post_discord_message('Server Started')
   print('Register IP - END')
 
 
@@ -167,15 +184,22 @@ def no_active_players():
 
 
 def check_player_count():
-  task_arns = client.list_tasks(cluster=cluster).get('taskArns')
-  if len(task_arns) == 0:
-    print("Server not running - Not checking player count")
-  elif get_players(task_arns[0]) > 0:
-    has_active_players()
-  else:
-    no_active_players()
+  try:
+    task_arns = client.list_tasks(cluster=cluster).get('taskArns')
+    if len(task_arns) == 0:
+      print("Server not running - Not checking player count")
+    elif get_players(task_arns[0]) > 0:
+      has_active_players()
+    else:
+      no_active_players()
+  except boto3.exceptions.InvalidParameterException:
+    print("Server is launching - Not checking player count")
 
 
-def lambda_handler(event, context):
-  check_dns()
-  check_player_count()
+def lambda_handler(event=None, context=None):
+  try:
+    check_dns()
+    check_player_count()
+  except Exception as e:
+    post_discord_message(e, admin_ping=True)
+    raise e

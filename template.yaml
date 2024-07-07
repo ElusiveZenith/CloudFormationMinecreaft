@@ -41,6 +41,11 @@ Parameters:
   WorldSeed:
     Default: ""
     Type: String
+  DiscordWebhookUrl:
+    Type: String
+  DiscordWebhookUsername:
+    Default: "Minecraft Server"
+    Type: String
   MaxPlayers:
     Default: 20
     Type: Number
@@ -58,6 +63,14 @@ Parameters:
     Type: String
   PublicSubnet2CIDR:
     Default: 10.30.2.0/24
+    Type: String
+  ServerManagementJobFile:
+    Default: "ServerManagementJob.zip"
+    Type: String
+  HostedZoneId:
+    Type: String
+  DiscordErrorAdminId:
+    Description: '@id if user id, @&id if role'
     Type: String
 
 Resources:
@@ -400,35 +413,116 @@ Resources:
           Value: /world/datapacks
 
 
-  # AdminEC2
-  EC2:
-    Type: AWS::EC2::Instance
+  # Server Monitoring Job
+  ServerMonitorLambdaRole:
+    Type: AWS::IAM::Role
     Properties:
-      ImageId: ami-04e5276ebb8451442
-      InstanceType: t2.nano
-      SubnetId: !Ref PublicSubnet1
-      SecurityGroupIds:
-        - !GetAtt EC2SecurityGroup.GroupId
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-AdminEC2'
-      UserData: 
-        Fn::Base64: !Join
-          - ''
-          - - 'sudo yum install -y amazon-efs-utils'
-            - 'sudo mkdir efs'
-            - !Sub sudo mount -t efs ${EFSFileSystem} efs/
-  EC2SecurityGroup:
-    Type: AWS::EC2::SecurityGroup
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub '${AWS::StackName}-Server-Monitor-Policy'
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            Resource: arn:aws:logs:*:*:*
+          - Effect: Allow
+            Action:
+            - ssm:DescribeSessions
+            - ec2:DescribeNetworkInterfaces
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - route53:ListResourceRecordSets
+            - route53:ChangeResourceRecordSets
+            Resource: !Sub 'arn:aws:route53:::hostedzone/${HostedZoneId}'
+          - Effect: Allow
+            Action:
+            - ecs:ListTasks
+            - ecs:DescribeTasks
+            - ecs:ListTagsForResource
+            - ecs:ExecuteCommand
+            - ecs:TagResource
+            - ecs:UntagResource
+            - ecs:UpdateService 
+            Resource:
+            - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ServerCluster}/${AWS::StackName}'
+            - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ServerCluster}/*'
+            - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/${ServerCluster}/*'
+            - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ServerCluster}'
+            - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/${ServerCluster}/*'
+  ServerMonitorLambda:
+    Type: AWS::Lambda::Function
     Properties:
-      GroupDescription: !Sub '${AWS::StackName}-EC2-SSH'
-      VpcId: !Ref VPC
-  EC2SecurityGroupEFSIngress:
-    Type: AWS::EC2::SecurityGroupIngress
+      Description: Minecraft server monitor
+      Handler: lambda_function.lambda_handler
+      Code:
+        S3Bucket: !Sub '${LowercaseName}-lambdas-${AWS::AccountId}'
+        S3Key: !Ref ServerManagementJobFile
+      Environment:
+        Variables: 
+          CLUSTER: !Ref ServerCluster
+          SERVICE: !Ref Service
+          CONTAINER: !Ref AWS::StackName
+          DNS_NAME: !Ref Domain
+          DISCORD_WEBHOOK_URL: !Ref DiscordWebhookUrl
+          DISCORD_WEBHOOK_USERNAME: !Ref DiscordWebhookUsername
+          HOSTED_ZONE_ID: !Ref HostedZoneId
+          DISCORD_ERROR_ADMIN_ID: !Ref DiscordErrorAdminId
+      Role: !GetAtt ServerMonitorLambdaRole.Arn
+      Runtime: python3.10
+      MemorySize: 256
+      Timeout: 600
+  ServerMonitorSchedulerRole:
+    Type: AWS::IAM::Role
     Properties:
-      GroupId: !Ref EC2SecurityGroup
-      SourceSecurityGroupId: !Ref EC2SecurityGroup
-      IpProtocol: TCP
-      ToPort: 2049
-      FromPort: 2049
-      Description: EFS Port
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - scheduler.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub '${AWS::StackName}-Server-Monitor-Policy'
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource: !GetAtt ServerMonitorLambda.Arn
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+  ServerMonitorScheduler:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Scheduler for server's monitor
+      FlexibleTimeWindow: 
+        Mode: 'OFF'
+      Name: !Sub '${AWS::StackName}-Server-Monitor-Schedule'
+      ScheduleExpression: rate(5 minute)
+      State: DISABLED
+      Target: 
+        Arn: !GetAtt ServerMonitorLambda.Arn
+        RetryPolicy: 
+          MaximumRetryAttempts: 0
+        RoleArn: !GetAtt ServerMonitorSchedulerRole.Arn
+
