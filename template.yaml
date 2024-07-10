@@ -67,9 +67,15 @@ Parameters:
   ServerManagementJobFile:
     Default: "ServerManagementJob.zip"
     Type: String
+  ApiLambdaFile:
+    Default: "ServerApi.zip"
+    Type: String
   HostedZoneId:
     Type: String
   DiscordErrorAdminId:
+    Description: '@id if user id, @&id if role'
+    Type: String
+  DiscordNotificationRoleId:
     Description: '@id if user id, @&id if role'
     Type: String
 
@@ -494,6 +500,7 @@ Resources:
           DISCORD_WEBHOOK_URL: !Ref DiscordWebhookUrl
           DISCORD_WEBHOOK_USERNAME: !Ref DiscordWebhookUsername
           DISCORD_ERROR_ADMIN_ID: !Ref DiscordErrorAdminId
+          DISCORD_NOTIFICATION_ROLE_ID: !Ref DiscordNotificationRoleId
       Role: !GetAtt ServerMonitorLambdaRole.Arn
       Runtime: python3.10
       MemorySize: 256
@@ -533,7 +540,7 @@ Resources:
       FlexibleTimeWindow: 
         Mode: 'OFF'
       Name: !Sub '${AWS::StackName}-Server-Monitor-Schedule'
-      ScheduleExpression: rate(5 minute)
+      ScheduleExpression: rate(3 minute)
       State: DISABLED
       Target: 
         Arn: !GetAtt ServerMonitorLambda.Arn
@@ -541,3 +548,146 @@ Resources:
           MaximumRetryAttempts: 0
         RoleArn: !GetAtt ServerMonitorSchedulerRole.Arn
 
+
+  # API
+  ApiLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: !Sub '${AWS::StackName}-API-Policy'
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            Resource: arn:aws:logs:*:*:*
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: !GetAtt ServerMonitorSchedulerRole.Arn
+          - Effect: Allow
+            Action:
+            - scheduler:GetSchedule
+            - scheduler:UpdateSchedule
+            Resource: !GetAtt ServerMonitorScheduler.Arn
+          - Effect: Allow
+            Action:
+            - ecs:UpdateService 
+            Resource:
+            - !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ServerCluster}/${AWS::StackName}'
+  ApiLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: API for Minecraft Server
+      Handler: lambda_function.lambda_handler
+      Code:
+        S3Bucket: !Sub '${LowercaseName}-lambdas-${AWS::AccountId}'
+        S3Key: !Ref ApiLambdaFile
+      Environment:
+        Variables: 
+          DISCORD_WEBHOOK_URL: !Ref DiscordWebhookUrl
+          DISCORD_WEBHOOK_USERNAME: !Ref DiscordWebhookUsername
+          DISCORD_ERROR_ADMIN_ID: !Ref DiscordErrorAdminId
+          DISCORD_NOTIFICATION_ROLE_ID: !Ref DiscordNotificationRoleId
+      Role: !GetAtt ApiLambdaRole.Arn
+      Runtime: python3.10
+      MemorySize: 256
+      Timeout: 300
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !GetAtt ApiLambda.Arn
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${AWS::StackName}-API'
+  ApiGatewayResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: '{proxy+}'
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: AWS_IAM
+      HttpMethod: ANY
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambda.Arn}/invocations'
+      ResourceId: !Ref ApiGatewayResource
+      RestApiId: !Ref ApiGateway
+  # ApiStage:
+  #   Type: AWS::ApiGateway::Stage
+  #   Properties:
+  #     DeploymentId: !Ref ApiDeployment
+  #     RestApiId: !Ref ApiGateway
+  #     StageName: LATEST
+  # ApiDeployment:
+  #   Type: AWS::ApiGateway::Deployment
+  #   Properties:
+  #     RestApiId: !Ref ApiGateway
+  #     StageName: DummyStage
+  ApiUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-API-User'
+      Policies: 
+      - PolicyName: ApiAccess
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Sid: IamListAccess
+              Effect: Allow
+              Action:
+              - execute-api:Invoke
+              Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+
+
+  # AdminEC2
+  EC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-04e5276ebb8451442
+      InstanceType: t2.nano
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !GetAtt EC2SecurityGroup.GroupId
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-AdminEC2'
+      UserData: 
+        Fn::Base64: !Join
+          - ''
+          - - 'sudo yum install -y amazon-efs-utils'
+            - 'sudo mkdir efs'
+            - !Sub sudo mount -t efs ${EFSFileSystem} efs/
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${AWS::StackName}-EC2-SSH'
+      VpcId: !Ref VPC
+  EC2SecurityGroupEFSIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EC2SecurityGroup
+      SourceSecurityGroupId: !Ref EC2SecurityGroup
+      IpProtocol: TCP
+      ToPort: 2049
+      FromPort: 2049
+      Description: EFS Port

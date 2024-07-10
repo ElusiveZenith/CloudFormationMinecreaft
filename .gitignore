@@ -1,4 +1,5 @@
 ServerManagementJob/package
+ServerApi/package
 **/__pycache__
 *.zip
 requirements.txt
