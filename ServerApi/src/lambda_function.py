@@ -61,6 +61,9 @@ def routing(path):
   match path:
     case "/start":
       return start_server()
+    case "/health":
+      return 200, "API Running"
+
 
 
 def lambda_handler(event, context):
