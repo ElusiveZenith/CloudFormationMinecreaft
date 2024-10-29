@@ -170,7 +170,7 @@ def has_active_players():
       client.untag_resource(resourceArn=service, tagKeys=['NoPlayerChecks'])
   except Exception:
       pass
-  # TODO: If uptime is more than x, send AFK reminder to discord / notification to me
+  # TODO: If uptime is more than x, send AFK reminder to discord / notification to aws admin
   # TODO: If uptime is more than y, restart server after warning
 
 

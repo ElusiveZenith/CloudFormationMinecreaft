@@ -65,7 +65,6 @@ def routing(path):
       return 200, "API Running"
 
 
-
 def lambda_handler(event, context):
   status_code, message = routing(event['path'])
   return {

@@ -632,17 +632,6 @@ Resources:
         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambda.Arn}/invocations'
       ResourceId: !Ref ApiGatewayResource
       RestApiId: !Ref ApiGateway
-  # ApiStage:
-  #   Type: AWS::ApiGateway::Stage
-  #   Properties:
-  #     DeploymentId: !Ref ApiDeployment
-  #     RestApiId: !Ref ApiGateway
-  #     StageName: LATEST
-  # ApiDeployment:
-  #   Type: AWS::ApiGateway::Deployment
-  #   Properties:
-  #     RestApiId: !Ref ApiGateway
-  #     StageName: DummyStage
   ApiInvokeManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -664,34 +653,34 @@ Resources:
 
 
   # AdminEC2
-  EC2:
-    Type: AWS::EC2::Instance
-    Properties:
-      ImageId: ami-04e5276ebb8451442
-      InstanceType: t2.nano
-      SubnetId: !Ref PublicSubnet1
-      SecurityGroupIds:
-        - !GetAtt EC2SecurityGroup.GroupId
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-AdminEC2'
-      UserData: 
-        Fn::Base64: !Join
-          - ''
-          - - 'sudo yum install -y amazon-efs-utils'
-            - 'sudo mkdir efs'
-            - !Sub sudo mount -t efs ${EFSFileSystem} efs/
-  EC2SecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: !Sub '${AWS::StackName}-EC2-SSH'
-      VpcId: !Ref VPC
-  EC2SecurityGroupEFSIngress:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref EC2SecurityGroup
-      SourceSecurityGroupId: !Ref EC2SecurityGroup
-      IpProtocol: TCP
-      ToPort: 2049
-      FromPort: 2049
-      Description: EFS Port
+  # EC2:
+  #   Type: AWS::EC2::Instance
+  #   Properties:
+  #     ImageId: ami-04e5276ebb8451442
+  #     InstanceType: t2.nano
+  #     SubnetId: !Ref PublicSubnet1
+  #     SecurityGroupIds:
+  #       - !GetAtt EC2SecurityGroup.GroupId
+  #     Tags:
+  #       - Key: Name
+  #         Value: !Sub '${AWS::StackName}-AdminEC2'
+  #     UserData: 
+  #       Fn::Base64: !Join
+  #         - ''
+  #         - - 'sudo yum install -y amazon-efs-utils'
+  #           - 'sudo mkdir efs'
+  #           - !Sub sudo mount -t efs ${EFSFileSystem} efs/
+  # EC2SecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #     GroupDescription: !Sub '${AWS::StackName}-EC2-SSH'
+  #     VpcId: !Ref VPC
+  # EC2SecurityGroupEFSIngress:
+  #   Type: AWS::EC2::SecurityGroupIngress
+  #   Properties:
+  #     GroupId: !Ref EC2SecurityGroup
+  #     SourceSecurityGroupId: !Ref EC2SecurityGroup
+  #     IpProtocol: TCP
+  #     ToPort: 2049
+  #     FromPort: 2049
+  #     Description: EFS Port

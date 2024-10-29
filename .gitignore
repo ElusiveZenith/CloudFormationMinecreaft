@@ -3,3 +3,4 @@ ServerApi/package
 **/__pycache__
 *.zip
 requirements.txt
+*.drawio
