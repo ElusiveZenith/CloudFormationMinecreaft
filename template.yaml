@@ -7,6 +7,8 @@ Parameters:
     Type: String
     AllowedValues:
       - 'TRUE'
+  SftpPassword:
+    Type: String
   MinecraftVersion:
     Default: LATEST
     Type: String
@@ -137,6 +139,20 @@ Resources:
           MountPoints:
             - SourceVolume: efs-volume
               ContainerPath: /data
+        - Name: !Sub '${AWS::StackName}-sftp'
+          Image: docker.io/atmoz/sftp:latest
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: sftp
+          Environment:
+            - Name: SFTP_USERS
+              Value: !Sub 'admin:${SftpPassword}:::data'
+          MountPoints:
+            - SourceVolume: efs-volume
+              ContainerPath: /home/admin/data
       Volumes:
         - Name: efs-volume
           EFSVolumeConfiguration:
@@ -212,6 +228,11 @@ Resources:
           FromPort: 25565
           CidrIp: 0.0.0.0/0
           Description: Minecraft Client Port
+        - IpProtocol: TCP
+          ToPort: 22
+          FromPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: FoundryVTT SFTP Port
   ContainerSecurityGroupEFSIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
@@ -271,7 +292,6 @@ Resources:
       FileSystemId: !Ref EFSFileSystem
       SecurityGroups: 
         - !Ref ContainerSecurityGroup
-        - !Ref EC2SecurityGroup
       SubnetId: !Ref PublicSubnet1
   EFSMountTarget2:
     Type: AWS::EFS::MountTarget
@@ -279,7 +299,6 @@ Resources:
       FileSystemId: !Ref EFSFileSystem
       SecurityGroups: 
         - !Ref ContainerSecurityGroup
-        - !Ref EC2SecurityGroup
       SubnetId: !Ref PublicSubnet2
 
   # VPC and subnets
@@ -398,6 +417,9 @@ Resources:
         BucketAccessRoleArn: !GetAtt SyncRole.Arn
   SyncLocationEFS:
     Type: AWS::DataSync::LocationEFS
+    DependsOn: 
+      - EFSMountTarget1
+      - EFSMountTarget2
     Properties:
       AccessPointArn: !GetAtt EFSAccessPoint.Arn
       Ec2Config: 
@@ -651,36 +673,3 @@ Resources:
       ManagedPolicyArns:
       - !Ref ApiInvokeManagedPolicy
 
-
-  # AdminEC2
-  # EC2:
-  #   Type: AWS::EC2::Instance
-  #   Properties:
-  #     ImageId: ami-04e5276ebb8451442
-  #     InstanceType: t2.nano
-  #     SubnetId: !Ref PublicSubnet1
-  #     SecurityGroupIds:
-  #       - !GetAtt EC2SecurityGroup.GroupId
-  #     Tags:
-  #       - Key: Name
-  #         Value: !Sub '${AWS::StackName}-AdminEC2'
-  #     UserData: 
-  #       Fn::Base64: !Join
-  #         - ''
-  #         - - 'sudo yum install -y amazon-efs-utils'
-  #           - 'sudo mkdir efs'
-  #           - !Sub sudo mount -t efs ${EFSFileSystem} efs/
-  # EC2SecurityGroup:
-  #   Type: AWS::EC2::SecurityGroup
-  #   Properties:
-  #     GroupDescription: !Sub '${AWS::StackName}-EC2-SSH'
-  #     VpcId: !Ref VPC
-  # EC2SecurityGroupEFSIngress:
-  #   Type: AWS::EC2::SecurityGroupIngress
-  #   Properties:
-  #     GroupId: !Ref EC2SecurityGroup
-  #     SourceSecurityGroupId: !Ref EC2SecurityGroup
-  #     IpProtocol: TCP
-  #     ToPort: 2049
-  #     FromPort: 2049
-  #     Description: EFS Port
