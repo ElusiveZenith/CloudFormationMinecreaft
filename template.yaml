@@ -26,6 +26,12 @@ Parameters:
       - 12G
       - 14G
       - 16G
+  Type:
+    Default: PAPER
+    Type: String
+    AllowedValues:
+      - PAPER
+      - FABRIC
   Difficulty:
     Default: normal
     Type: String
@@ -121,7 +127,7 @@ Resources:
             - Name: EULA
               Value: !Ref AcceptEULA
             - Name: TYPE
-              Value: PAPER
+              Value: !Ref Type
             - Name: MEMORY
               Value: !Ref Memory
             - Name: VERSION
